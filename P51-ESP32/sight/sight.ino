@@ -152,13 +152,14 @@ void loop() {
     lastPitch = pitch; lastRoll = roll;
   }
 
-  // 5. SERIAL BROADCAST TO SLAVE (V, G, P, R, H)
+  // Master Serial Broadcast (V, G, P, R, H, Armed)
   if (millis() - lastBroadcast > 50) {
     Serial1.print(vBat); Serial1.print(",");
     Serial1.print(currentG); Serial1.print(",");
     Serial1.print(pitch); Serial1.print(",");
     Serial1.print(roll); Serial1.print(",");
-    Serial1.println(heading);
+    Serial1.print(heading); Serial1.print(",");
+    Serial1.println(warActive ? 1 : 0); // 1 = High Brightness, 0 = Dim
     lastBroadcast = millis();
   }
 
