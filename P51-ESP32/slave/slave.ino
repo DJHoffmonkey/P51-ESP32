@@ -4,11 +4,13 @@
 #include <Wire.h>
 
 /* --- SLAVE AVIONICS (ESP32-C3 #2) ---
- * Role: 5-Screen Instrument Cluster with Hardware Brightness Hack
- * Fixed: Struct declaration order to prevent 'Gauge' has not been declared error.
+ * Role: 5-Screen Instrument Cluster
+ * Displays: 
+ * 1 & 2: 1.3" SPI SH1106 (Main Panels - CS Pins 0 and 7)
+ * 3 & 4: 0.96" I2C SSD1306 (Aux Panels - Addresses 0x3C and 0x3D)
+ * 5: 0.49" I2C SSD1306 (Ribbon Compass - Shared Bus)
  */
 
-// 1. DEFINE STRUCT FIRST
 struct Gauge { 
   int x, y, r; 
   float minVal, maxVal; 
@@ -25,26 +27,23 @@ U8G2_SSD1306_72X40_ER_1_HW_I2C      u8g2_S(U8G2_R0,  U8X8_PIN_NONE, 6, 5); // 0.
 // 3. GLOBAL VARIABLES
 float vBat, currentG, pitch, roll, heading;
 bool masterArmed = false;
-bool slaveInsaneMode = false;
+int currentSlaveContrast = 20;
 
 // Stencil offsets for the 1.3" screens
 Gauge leftPanel[] = { {32, 32, 28, 0, 700, "MPH"}, {32, 96, 28, 0, 10000, "ALT"} };
 Gauge rightPanel[] = { {32, 96, 28, -2000, 2000, "VSI"} };
 
-// 4. BRIGHTNESS CONTROLLER
-void setCockpitBrightness(bool boost) {
-  U8G2* screens[] = {&u8g2_L, &u8g2_R, &u8g2_P1, &u8g2_P2, &u8g2_S};
-  uint8_t precharge = boost ? 0xF1 : 0x22;
-  uint8_t vcomh = boost ? 0x40 : 0x20;
-  int contrast = boost ? 255 : 20;
-
-  for (int i = 0; i < 5; i++) {
-    screens[i]->sendF("c", 0xD9); screens[i]->sendF("c", precharge);
-    screens[i]->sendF("c", 0xDB); screens[i]->sendF("c", vcomh);
-    screens[i]->sendF("c", 0x8D); screens[i]->sendF("c", 0x14);
-    screens[i]->setContrast(contrast);
+// 4. CLEAN BRIGHTNESS SYNC (No Hardware Overdrive)
+void syncContrast(bool armed) {
+  int target = armed ? 255 : 20;
+  if (currentSlaveContrast != target) {
+    u8g2_L.setContrast(target);
+    u8g2_R.setContrast(target);
+    u8g2_P1.setContrast(target);
+    u8g2_P2.setContrast(target);
+    u8g2_S.setContrast(target);
+    currentSlaveContrast = target;
   }
-  slaveInsaneMode = boost;
 }
 
 // 5. DRAWING FUNCTIONS
@@ -79,7 +78,7 @@ void setup() {
   u8g2_P2.setI2CAddress(0x3D * 2); u8g2_P2.begin();
   u8g2_S.begin();
   
-  setCockpitBrightness(false); // Start Dim
+  syncContrast(false); // Start Dim
 }
 
 void loop() {
@@ -87,9 +86,8 @@ void loop() {
     String line = Serial1.readStringUntil('\n');
     parseData(line);
 
-    // Brightness Sync
-    if (masterArmed && !slaveInsaneMode) setCockpitBrightness(true);
-    else if (!masterArmed && slaveInsaneMode) setCockpitBrightness(false);
+    // Instrument brightness
+    syncContrast(masterArmed);
 
     // --- SCREEN RENDER ---
     u8g2_L.clearBuffer();
