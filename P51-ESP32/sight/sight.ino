@@ -1,28 +1,36 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include <Wire.h>
+#include <esp_log.h>
 
 /* --- MASTER AVIONICS (ESP32-C3 #1) ---
- * Role: MSP Parsing, K-14 HUD (0.49" 72x40), Serial Bridge to Slave
+ * Role: MSP Parsing, K-14 HUD (0.42" 72x40), Serial Bridge to Slave
  * Pins: 
  * - HUD: 5 (SDA), 6 (SCL)
  * - FC: 20 (RX)
- * - Slave Link: 21 (TX)
  * - Button: 9
  * - Blue LED: 8
  */
 
-// HUD Constructor (72x40 0.49" OLED)
-U8G2_SSD1306_72X40_ER_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 6, /* data=*/ 5);
 
 // --- MISSION CONSTANTS ---
 const int BOOT_BUTTON = 9;   
-const int LED_BLUE = 8;      
+const int LED_BLUE = 8;
+const int BUILT_IN_LED_SCL = 6;
+const int BUILT_IN_LED_SDA = 5;     
+const int SLAVE_TX = 2;
+const int SLAVE_RX = 3;
+const int RX_FROM_FC = 20;
+const int TX_TO_FC = 21;
 const int ARM_RC_CHANNEL = 13; 
 const float LEAD_SENSITIVITY = 6.0;
 const float ACCEL_1G = 512.0;
 const float VOLT_THRESHOLD = 14.0;
 const unsigned long BATT_DEBOUNCE = 2000;
+
+// HUD Constructor (72x40 0.42" OLED)
+U8G2_SSD1306_72X40_ER_F_HW_I2C u8g2_builtin(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, BUILT_IN_LED_SCL, BUILT_IN_LED_SDA);
+
 
 // --- SYSTEM VARIABLES ---
 int manualContrast = 20; 
@@ -39,14 +47,14 @@ bool sessionHasMSP = false, currentlyReceiving = false, showLowBatText = false;
 // --- HARDWARE BOOST (STARK HACK) ---
 void applyHardwareBoost(bool enable) {
   if (enable) {
-    u8g2.sendF("c", 0xD9); u8g2.sendF("c", 0xF1);
-    u8g2.sendF("c", 0xDB); u8g2.sendF("c", 0x40);
-    u8g2.sendF("c", 0x8D); u8g2.sendF("c", 0x14);
+    u8g2_builtin.sendF("c", 0xD9); u8g2_builtin.sendF("c", 0xF1);
+    u8g2_builtin.sendF("c", 0xDB); u8g2_builtin.sendF("c", 0x40);
+    u8g2_builtin.sendF("c", 0x8D); u8g2_builtin.sendF("c", 0x14);
     insaneModeActive = true;
   } else {
-    u8g2.sendF("c", 0xD9); u8g2.sendF("c", 0x22);
-    u8g2.sendF("c", 0xDB); u8g2.sendF("c", 0x20);
-    u8g2.sendF("c", 0x8D); u8g2.sendF("c", 0x14);
+    u8g2_builtin.sendF("c", 0xD9); u8g2_builtin.sendF("c", 0x22);
+    u8g2_builtin.sendF("c", 0xDB); u8g2_builtin.sendF("c", 0x20);
+    u8g2_builtin.sendF("c", 0x8D); u8g2_builtin.sendF("c", 0x14);
     insaneModeActive = false;
   }
 }
@@ -93,35 +101,42 @@ void readMSPResponse() {
 }
 
 void setup() {
+  // turn off logging for the moment.
+  esp_log_level_set("*", ESP_LOG_NONE);
+
   // 1. LINK TO COMPUTER (USB Debugging)
   // Ensure "USB CDC On Boot" is ENABLED in the Arduino Tools menu
   Serial.begin(115200); 
-  
+
   // 2. LINK TO FLIGHT CONTROLLER (Pins 20/21)
   // This is your existing working FC connection
-  Serial1.begin(115200, SERIAL_8N1, 20, 21); 
+  Serial1.begin(115200, SERIAL_8N1, RX_FROM_FC, TX_TO_FC); 
 
   // 3. LINK TO SLAVE (Cockpit Screens)
-  // We use Serial0 but re-route it to Pin 10 (TX) and Pin 7 (RX)
+  // We use Serial0 but re-route it to different Pins
   // This prevents it from clashing with the FC on pins 20/21
-  //Serial0.begin(115200, SERIAL_8N1, 7, 10); 
-  Serial0.begin(115200, SERIAL_8N1, 3, 2);
+  Serial0.begin(115200, SERIAL_8N1, SLAVE_RX, SLAVE_TX);
 
   // Hardware Initialization
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
   pinMode(LED_BLUE, OUTPUT);
   digitalWrite(LED_BLUE, HIGH); 
   
-  u8g2.begin();
-  u8g2.setContrast(20);
+  u8g2_builtin.begin();
+  u8g2_builtin.setContrast(20);
   applyHardwareBoost(false);
 
   // This will now print to your Computer Console
   Serial.println("MASTER ONLINE");
   Serial.println("Pipe 1: USB (Debug)");
   Serial.println("Pipe 2: Serial1 (FC on 20/21)");
-  Serial.println("Pipe 3: Serial0 (Slave on Pin 2)");
+  Serial.print("Pipe 3: Serial0 - Slave TX on Master Pin: "); Serial.print(SLAVE_TX); Serial.print(" - Slave RX on Master Pin: "); Serial.println(SLAVE_RX);
 }
+
+// void logStatus(String msg) {
+//   Serial.println("[PC] " + msg);    // Goes to your USB Monitor
+//   Serial0.println(msg);            // Goes to the Cockpit Screen
+// }
 
 void loop() {
   // 1. BUTTON / CONTRAST OVERRIDE
@@ -152,7 +167,7 @@ void loop() {
   int targetContrast = manualMode ? manualContrast : (warActive ? 255 : 20);
   if (abs(currentContrast - targetContrast) > 1) {
     currentContrast += (targetContrast - currentContrast) * ((targetContrast > currentContrast) ? 0.10 : 0.25); 
-    u8g2.setContrast((int)currentContrast);
+    u8g2_builtin.setContrast((int)currentContrast);
     if (currentContrast > 210 && !insaneModeActive) applyHardwareBoost(true);
     if (currentContrast < 90 && insaneModeActive) applyHardwareBoost(false);
   }
@@ -174,12 +189,12 @@ void loop() {
 
   // Master Serial Broadcast (V, G, P, R, H, Armed)
   if (millis() - lastBroadcast > 50) {
-    Serial1.print(vBat); Serial1.print(",");
-    Serial1.print(currentG); Serial1.print(",");
-    Serial1.print(pitch); Serial1.print(",");
-    Serial1.print(roll); Serial1.print(",");
-    Serial1.print(heading); Serial1.print(",");
-    Serial1.println(warActive ? 1 : 0); // 1 = High Brightness, 0 = Dim
+    Serial0.print(vBat); Serial0.print(",");
+    Serial0.print(currentG); Serial0.print(",");
+    Serial0.print(pitch); Serial0.print(",");
+    Serial0.print(roll); Serial0.print(",");
+    Serial0.print(heading); Serial0.print(",");
+    Serial0.println(warActive ? 1 : 0); // 1 = High Brightness, 0 = Dim
     lastBroadcast = millis();
   }
 
@@ -188,30 +203,30 @@ void loop() {
   bool ledOn = (distSq < 1.5) || (showLowBatText && (millis() % 200 < 100));
   digitalWrite(LED_BLUE, ledOn ? LOW : HIGH);
 
-  u8g2.firstPage();
+  u8g2_builtin.firstPage();
   do {
-    u8g2.setFont(u8g2_font_04b_03_tr);
+    u8g2_builtin.setFont(u8g2_font_04b_03_tr);
     const char* sym = currentlyReceiving ? (warActive ? "*" : "+") : "-";
-    u8g2.drawStr(2, 5, sym); u8g2.drawStr(66, 5, sym);
-    u8g2.drawStr(2, 39, sym); u8g2.drawStr(66, 39, sym);
+    u8g2_builtin.drawStr(2, 5, sym); u8g2_builtin.drawStr(66, 5, sym);
+    u8g2_builtin.drawStr(2, 39, sym); u8g2_builtin.drawStr(66, 39, sym);
 
     // K-14 Sight Reticle
-    u8g2.drawCircle(36, 20, 17); u8g2.drawCircle(36, 20, 18);
+    u8g2_builtin.drawCircle(36, 20, 17); u8g2_builtin.drawCircle(36, 20, 18);
     int curX = 36 + (int)filteredX; int curY = 20 + (int)filteredY;
-    u8g2.drawBox(curX - 1, curY - 1, 3, 3);
+    u8g2_builtin.drawBox(curX - 1, curY - 1, 3, 3);
     for (int i = 0; i < 6; i++) {
       float a = i * 1.047;
-      u8g2.drawBox(curX + (cos(a) * 12) - 1, curY + (sin(a) * 12) - 1, 2, 2);
+      u8g2_builtin.drawBox(curX + (cos(a) * 12) - 1, curY + (sin(a) * 12) - 1, 2, 2);
     }
     
     // G-Meter
-    u8g2.drawLine(0, 10, 0, 30);
-    u8g2.drawHLine(0, constrain(20 - (int)((currentG - 1.0) * 8.0), 10, 30), 3);
+    u8g2_builtin.drawLine(0, 10, 0, 30);
+    u8g2_builtin.drawHLine(0, constrain(20 - (int)((currentG - 1.0) * 8.0), 10, 30), 3);
 
     if (showLowBatText) {
       char vBuf[6]; dtostrf(vBat, 4, 1, vBuf);
-      u8g2.drawStr(25, 39, "LOW "); u8g2.drawStr(45, 39, vBuf);
+      u8g2_builtin.drawStr(25, 39, "LOW "); u8g2_builtin.drawStr(45, 39, vBuf);
     }
-    if (manualMode) u8g2.drawStr(28, 5, "MAN");
-  } while (u8g2.nextPage());
+    if (manualMode) u8g2_builtin.drawStr(28, 5, "MAN");
+  } while (u8g2_builtin.nextPage());
 }
