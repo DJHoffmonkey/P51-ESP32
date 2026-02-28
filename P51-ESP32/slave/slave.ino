@@ -131,20 +131,16 @@ void setup() {
   u8g2bi.sendBuffer();
 }
 
+bool dataChanged = false; // The "Dirty Flag"
+
 void readMasterData() {
-  // Use a 'while' instead of 'if' to clear the entire backlog
   while (fromMaster.available() > 0) {
     String tag = fromMaster.readStringUntil(':'); 
     tag.trim(); 
-    
-    // If we get an empty tag, it's just junk between colons; skip it
     if (tag.length() == 0) continue;
 
     float value = fromMaster.parseFloat();
-    
-    // DEBUG PRINT (Keep this for now)
-    console.print("TAG: "); console.print(tag);
-    console.print(" | VAL: "); console.println(value);
+    dataChanged = true; // Flag that we have fresh intel
     
     if (tag == "ROL") roll = value;
     else if (tag == "PIT") pitch = value;
@@ -154,9 +150,7 @@ void readMasterData() {
     else if (tag == "GFO") currentG = value;
     else if (tag == "WAR") warActive = (value > 0.5);
     
-    // This is the "Garbage Disposal":
-    // It eats the comma or newline so the NEXT 'readStringUntil' starts 
-    // exactly at the first letter of the next tag.
+    // Garbage Disposal
     while (fromMaster.available() > 0 && 
           (fromMaster.peek() == ',' || fromMaster.peek() == '\n' || fromMaster.peek() == '\r')) {
       fromMaster.read();
@@ -165,19 +159,23 @@ void readMasterData() {
 }
 
 void loop() {
-  // Process ALL waiting data from the Master
   readMasterData(); 
 
-  // Refresh Horizon (using the cleaned global variables)
-  u8g2e1.clearBuffer();
-  cockpit.horizon.val1 = roll;
-  cockpit.horizon.val2 = pitch;
-  drawHorizon(cockpit.horizon);
-  u8g2e1.sendBuffer();
+  // ONLY draw if the Master actually sent something new
+  if (dataChanged) {
+    // 1. Update Horizon
+    u8g2e1.clearBuffer();
+    cockpit.horizon.val1 = roll;
+    cockpit.horizon.val2 = pitch;
+    drawHorizon(cockpit.horizon);
+    u8g2e1.sendBuffer();
 
-  // Refresh Altimeter
-  u8g2e2.clearBuffer();
-  cockpit.altimeter.val1 = altitude;
-  drawAltimeter(cockpit.altimeter);
-  u8g2e2.sendBuffer();
+    // 2. Update Altimeter
+    u8g2e2.clearBuffer();
+    cockpit.altimeter.val1 = altitude;
+    drawAltimeter(cockpit.altimeter);
+    u8g2e2.sendBuffer();
+
+    dataChanged = false; // Reset the flag until the next packet arrives
+  }
 }
