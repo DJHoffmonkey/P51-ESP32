@@ -132,13 +132,17 @@ void setup() {
 }
 
 void readMasterData() {
+  // Use a 'while' instead of 'if' to clear the entire backlog
   while (fromMaster.available() > 0) {
     String tag = fromMaster.readStringUntil(':'); 
-    tag.trim(); // Remove any hidden spaces or newlines
+    tag.trim(); 
     
-    float value = fromMaster.parseFloat();
+    // If we get an empty tag, it's just junk between colons; skip it
+    if (tag.length() == 0) continue;
 
-    // --- CONSOLE PRINTING
+    float value = fromMaster.parseFloat();
+    
+    // DEBUG PRINT (Keep this for now)
     console.print("TAG: "); console.print(tag);
     console.print(" | VAL: "); console.println(value);
     
@@ -149,14 +153,14 @@ void readMasterData() {
     else if (tag == "BAT") vBat = value;
     else if (tag == "GFO") currentG = value;
     else if (tag == "WAR") warActive = (value > 0.5);
-
-    // Skip the comma/newline to get to the next Tag immediately
-    if (fromMaster.peek() == ',' || fromMaster.peek() == '\n' || fromMaster.peek() == '\r') {
+    
+    // This is the "Garbage Disposal":
+    // It eats the comma or newline so the NEXT 'readStringUntil' starts 
+    // exactly at the first letter of the next tag.
+    while (fromMaster.available() > 0 && 
+          (fromMaster.peek() == ',' || fromMaster.peek() == '\n' || fromMaster.peek() == '\r')) {
       fromMaster.read();
     }
-    
-    // Safety: If the buffer is getting too full, break out and draw
-    if (fromMaster.available() > 64) break; 
   }
 }
 
