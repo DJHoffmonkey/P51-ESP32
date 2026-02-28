@@ -89,27 +89,64 @@ void drawHorizon(Instrument &inst) {
 void drawAltimeter(Instrument &inst) {
   U8G2* dev = inst.screen;
   float alt = inst.val1;
-  int cx = inst.x;
-  int cy = inst.y;
+  int cx = inst.x; 
+  int cy = inst.y; 
   int r = inst.r;
 
+  // 1. OUTER BEZEL
   dev->drawCircle(cx, cy, r);
-  
-  // 1. Long Hand (100s of feet) - Full circle every 1000ft
-  float angle1 = (fmod(alt, 1000.0) * 0.36) - 90.0;
-  float rad1 = angle1 * (PI / 180.0);
-  dev->drawLine(cx, cy, cx + (r-2)*cos(rad1), cy + (r-2)*sin(rad1));
 
-  // 2. Short Wide Hand (1000s of feet) - Full circle every 10,000ft
-  float angle2 = (fmod(alt, 10000.0) * 0.036) - 90.0;
-  float rad2 = angle2 * (PI / 180.0);
-  dev->drawLine(cx, cy, cx + (r-12)*cos(rad2), cy + (r-12)*sin(rad2));
-  
-  // 3. 10k Hand (Thin with end-marker) - Full circle every 100,000ft
-  float angle3 = (fmod(alt, 100000.0) * 0.0036) - 90.0;
-  float rad3 = angle3 * (PI / 180.0);
-  dev->drawLine(cx, cy, cx + (r-8)*cos(rad3), cy + (r-8)*sin(rad3));
-  dev->drawPixel(cx + (r-6)*cos(rad3), cy + (r-6)*sin(rad3)); // Tiny tip
+  // 2. TICKS AND NUMBERS (0-9)
+  dev->setFont(u8g2_font_04b_03_tr);
+  for (int i = 0; i < 10; i++) {
+    float angle = (i * 36 - 90) * (PI / 180.0);
+    
+    // Draw the Ticks (Rim to 3px Inset)
+    dev->drawLine(cx + (r-3)*cos(angle), cy + (r-3)*sin(angle), 
+                  cx + r*cos(angle), cy + r*sin(angle));
+    
+    // THE BUFFER 
+    char label[2]; 
+    itoa(i, label, 10);
+    
+    // Position numbers inside the ticks
+    int tx = cx + (r-10)*cos(angle) - 2; 
+    int ty = cy + (r-10)*sin(angle) + 3;
+    dev->drawStr(tx, ty, label);
+  }
+
+  // 3. KOLLSMAN WINDOW (Pressure Dial at 3 o'clock)
+  dev->drawFrame(cx + 10, cy - 5, 15, 10);
+  dev->drawStr(cx + 11, cy + 3, "29.9"); // Fixed the placeholder error
+  // Note: Using '29.9' for now, we can link this to Baro later.
+
+  // 4. THE HANDS (Drawn back-to-front)
+
+  // A. 10,000ft Hand (Shortest/Thin with the Dot)
+  float a10k = (fmod(alt, 100000.0) * 0.0036) - 90.0;
+  float rad10k = a10k * (PI / 180.0);
+  int px = cx + (r-18)*cos(rad10k);
+  int py = cy + (r-18)*sin(rad10k);
+  dev->drawLine(cx, cy, px, py);
+  dev->drawDisc(px, py, 2);
+
+  // B. 1,000ft Hand (The "Fat" White Broad Arrow from your photo)
+  float a1k = (fmod(alt, 10000.0) * 0.036) - 90.0;
+  float rad1k = a1k * (PI / 180.0);
+  int hx = cx + (r-12)*cos(rad1k);
+  int hy = cy + (r-12)*sin(rad1k);
+  // Drawing the wedge shape
+  dev->drawTriangle(hx, hy, 
+                    cx + (r-18)*cos(rad1k + 0.25), cy + (r-18)*sin(rad1k + 0.25), 
+                    cx + (r-18)*cos(rad1k - 0.25), cy + (r-18)*sin(rad1k - 0.25));
+
+  // C. 100ft Hand (Long/Thin Sweep Hand - Drawn Last)
+  float a100 = (fmod(alt, 1000.0) * 0.36) - 90.0;
+  float rad100 = a100 * (PI / 180.0);
+  dev->drawLine(cx, cy, cx + (r-4)*cos(rad100), cy + (r-4)*sin(rad100));
+
+  // 5. CENTER HUB
+  dev->drawDisc(cx, cy, 2);
 }
 
 void setup() {
