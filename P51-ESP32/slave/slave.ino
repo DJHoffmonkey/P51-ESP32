@@ -89,64 +89,80 @@ void drawHorizon(Instrument &inst) {
 void drawAltimeter(Instrument &inst) {
   U8G2* dev = inst.screen;
   float alt = inst.val1;
-  int cx = inst.x; 
-  int cy = inst.y; 
-  int r = inst.r;
+  int cx = inst.x; int cy = inst.y; int r = inst.r;
+  
+  // RADIUS DEFINITIONS
+  int tickInnerR = r - 5;    // Where the shaded tick area ends
+  int numberR = r - 10;      // Where the numbers are centered
+  int innerDelineator = r - 15; // The final circle inside the numbers
 
-  // 1. OUTER BEZEL
-  dev->drawCircle(cx, cy, r);
+  // 1. THE TICK-ZONE SHADING (10% Dither)
+  // Only fills the very outer 5 pixels where the tick marks are
+  for (int y = -r; y <= r; y++) {
+    for (int x = -r; x <= r; x++) {
+      int distSq = x*x + y*y;
+      if (distSq < (r*r) && distSq > (tickInnerR * tickInnerR)) {
+        if ((x % 3 == 0) && (y % 3 == 0)) { 
+          dev->drawPixel(cx + x, cy + y);
+        }
+      }
+    }
+  }
 
-  // 2. TICKS AND NUMBERS (0-9)
+  // 2. THE NEW INNER BORDERS
+  dev->drawCircle(cx, cy, tickInnerR);      // Line separating ticks from numbers
+  dev->drawCircle(cx, cy, innerDelineator); // Line separating numbers from the center
+
+  // 3. TICKS AND NUMBERS
   dev->setFont(u8g2_font_04b_03_tr);
   for (int i = 0; i < 10; i++) {
     float angle = (i * 36 - 90) * (PI / 180.0);
     
-    // Draw the Ticks (Rim to 3px Inset)
-    dev->drawLine(cx + (r-3)*cos(angle), cy + (r-3)*sin(angle), 
+    // Ticks (drawn over the 10% shading)
+    dev->drawLine(cx + tickInnerR*cos(angle), cy + tickInnerR*sin(angle), 
                   cx + r*cos(angle), cy + r*sin(angle));
     
-    // THE BUFFER 
+    // Numbers (now in a clean black "Number Ring")
     char label[2]; 
     itoa(i, label, 10);
     
-    // Position numbers inside the ticks
-    int tx = cx + (r-10)*cos(angle) - 2; 
-    int ty = cy + (r-10)*sin(angle) + 3;
+    int tx = cx + numberR*cos(angle) - 2; 
+    int ty = cy + numberR*sin(angle) + 3;
     dev->drawStr(tx, ty, label);
   }
 
-  // 3. KOLLSMAN WINDOW (Pressure Dial at 3 o'clock)
-  dev->drawFrame(cx + 10, cy - 5, 15, 10);
-  dev->drawStr(cx + 11, cy + 3, "29.9"); // Fixed the placeholder error
-  // Note: Using '29.9' for now, we can link this to Baro later.
-
-  // 4. THE HANDS (Drawn back-to-front)
-
-  // A. 10,000ft Hand (Shortest/Thin with the Dot)
+  // --- 4. THE HANDS (Keep your current 5px/3px code) ---
+  
+  // A. 10,000ft Hand
   float a10k = (fmod(alt, 100000.0) * 0.0036) - 90.0;
   float rad10k = a10k * (PI / 180.0);
-  int px = cx + (r-18)*cos(rad10k);
-  int py = cy + (r-18)*sin(rad10k);
-  dev->drawLine(cx, cy, px, py);
-  dev->drawDisc(px, py, 2);
+  int x10k = cx + (innerDelineator-3)*cos(rad10k);
+  int y10k = cy + (innerDelineator-3)*sin(rad10k);
+  for(float off = -0.05; off <= 0.05; off += 0.05) {
+    dev->drawLine(cx, cy, cx + (innerDelineator-3)*cos(rad10k + off), cy + (innerDelineator-3)*sin(rad10k + off));
+  }
+  dev->drawDisc(x10k, y10k, 2);
 
-  // B. 1,000ft Hand (The "Fat" White Broad Arrow from your photo)
+  // B. 1,000ft Hand (Tapered Wedge)
   float a1k = (fmod(alt, 10000.0) * 0.036) - 90.0;
   float rad1k = a1k * (PI / 180.0);
-  int hx = cx + (r-12)*cos(rad1k);
-  int hy = cy + (r-12)*sin(rad1k);
-  // Drawing the wedge shape
+  int hx = cx + (innerDelineator+2)*cos(rad1k);
+  int hy = cy + (innerDelineator+2)*sin(rad1k);
   dev->drawTriangle(hx, hy, 
-                    cx + (r-18)*cos(rad1k + 0.25), cy + (r-18)*sin(rad1k + 0.25), 
-                    cx + (r-18)*cos(rad1k - 0.25), cy + (r-18)*sin(rad1k - 0.25));
+                    cx + (innerDelineator-4)*cos(rad1k + 0.3), cy + (innerDelineator-4)*sin(rad1k + 0.3), 
+                    cx + (innerDelineator-4)*cos(rad1k - 0.3), cy + (innerDelineator-4)*sin(rad1k - 0.3));
+  dev->drawLine(cx, cy, hx, hy);
 
-  // C. 100ft Hand (Long/Thin Sweep Hand - Drawn Last)
+  // C. 100ft Hand (Long Sweep)
   float a100 = (fmod(alt, 1000.0) * 0.36) - 90.0;
   float rad100 = a100 * (PI / 180.0);
-  dev->drawLine(cx, cy, cx + (r-4)*cos(rad100), cy + (r-4)*sin(rad100));
+  for(float off = -0.08; off <= 0.08; off += 0.04) {
+    dev->drawLine(cx, cy, cx + (r-4)*cos(rad100 + off), cy + (r-4)*sin(rad100 + off));
+  }
 
   // 5. CENTER HUB
-  dev->drawDisc(cx, cy, 2);
+  dev->setDrawColor(0); dev->drawDisc(cx, cy, 3);
+  dev->setDrawColor(1); dev->drawCircle(cx, cy, 3);
 }
 
 void setup() {
