@@ -2,14 +2,22 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 #include <esp_log.h>
+#include <driver/uart.h>
 
 /* --- MASTER AVIONICS (ESP32-C3 #1) ---
  * Role: MSP Parsing, K-14 HUD, 3-Char Tagged Serial Broadcast
  */
 
 // Name the serial ports
-auto& console = Serial;   // USB Debugging to PC
-auto& toSlave = Serial1;  // Hardware link to the Slave ESP32-C3
+// Corrected Aliases for ESP32-C3
+//auto& console = Serial;      // USB CDC (to PC) - Only needs .begin(baud)
+//auto& toSlave = Serial0;     // Hardware UART0 (to Slave) - Can take 4 arguments
+//auto& toAndFromFC = Serial1; // Hardware UART1 (to FC) - Can take 4 arguments
+
+// HARDWARE SERIAL DEFINITIONS GO HERE
+#define console Serial 
+HardwareSerial toAndFromFC(1); 
+HardwareSerial toSlave(0);
 
 // --- MISSION CONSTANTS ---
 const int BOOT_BUTTON = 9;   
@@ -64,123 +72,161 @@ void applyHardwareBoost(bool enable) {
 
 void sendMSPRequest(uint8_t cmd) { 
   uint8_t req[] = {'$', 'M', '<', 0, cmd, cmd}; 
-  toSlave.write(req, 6); 
+  toAndFromFC.write(req, 6); 
 }
 
 void readMSPResponse() {
-  while (toSlave.available() >= 6) {
-    if (toSlave.peek() != '$') { 
-      toSlave.read(); 
+  while (toAndFromFC.available() >= 6) { 
+    if (toAndFromFC.peek() != '$') { 
+      toAndFromFC.read(); 
       continue; 
     }
-    if (toSlave.read() == '$' && toSlave.read() == 'M' && toSlave.read() == '>') {
-      uint8_t size = toSlave.read(); 
-      uint8_t cmd = toSlave.read();
+
+    if (toAndFromFC.read() == '$' && toAndFromFC.read() == 'M' && toAndFromFC.read() == '>') {
+      uint8_t size = toAndFromFC.read(); 
+      uint8_t cmd = toAndFromFC.read();
       sessionHasMSP = true; 
       lastDataTime = millis();
 
-      if (cmd == 108) { // ATTITUDE + HEADING
-        int16_t angX = toSlave.read() | (toSlave.read() << 8); 
-        int16_t angY = toSlave.read() | (toSlave.read() << 8); 
-        int16_t head = toSlave.read() | (toSlave.read() << 8); 
+      if (cmd == 108) { // ATTITUDE
+        int16_t angX = toAndFromFC.read() | (toAndFromFC.read() << 8); 
+        int16_t angY = toAndFromFC.read() | (toAndFromFC.read() << 8); 
+        int16_t head = toAndFromFC.read() | (toAndFromFC.read() << 8); 
         roll = angX / 10.0; 
         pitch = angY / 10.0; 
         heading = (float)head;
-        for (int i = 0; i < size - 6; i++) {
-          toSlave.read();
-        }
+        for (int i = 0; i < size - 6; i++) { toAndFromFC.read(); }
       } 
       else if (cmd == 109) { // ALTITUDE
-        int32_t altCm = toSlave.read() | (toSlave.read() << 8) | (toSlave.read() << 16) | (toSlave.read() << 24);
+        int32_t altCm = (int32_t)toAndFromFC.read() | ((int32_t)toAndFromFC.read() << 8) | ((int32_t)toAndFromFC.read() << 16) | ((int32_t)toAndFromFC.read() << 24);
         altitude = altCm * 0.0328084; 
-        for (int i = 0; i < size - 4; i++) {
-          toSlave.read();
-        }
+        for (int i = 0; i < size - 4; i++) { toAndFromFC.read(); }
       }
       else if (cmd == 102) { // RAW IMU
-        for (int i = 0; i < 4; i++) {
-          toSlave.read();
-        }
-        int16_t az = toSlave.read() | (toSlave.read() << 8); 
+        for (int i = 0; i < 4; i++) { toAndFromFC.read(); }
+        int16_t az = toAndFromFC.read() | (toAndFromFC.read() << 8); 
         currentG = (((float)az / ACCEL_1G) * 0.1) + (currentG * 0.9);
-        for (int i = 0; i < size - 6; i++) {
-          toSlave.read();
-        }
+        for (int i = 0; i < size - 6; i++) { toAndFromFC.read(); }
       } 
-      else if (cmd == 110) { // ANALOG VOLTS
-        vBat = ((toSlave.read() / 10.0) * 0.2) + (vBat * 0.8);
-        for (int i = 0; i < size - 1; i++) {
-          toSlave.read();
-        }
+      else if (cmd == 110) { // VOLTS
+        vBat = ((toAndFromFC.read() / 10.0) * 0.2) + (vBat * 0.8);
+        for (int i = 0; i < size - 1; i++) { toAndFromFC.read(); }
       } 
       else if (cmd == 105) { // RC CHANNELS
-        for (int i = 0; i < 8; i++) {
-          toSlave.read();
-        }
+        for (int i = 0; i < 8; i++) { toAndFromFC.read(); }
         for (int i = 4; i < ARM_RC_CHANNEL; i++) { 
-          toSlave.read(); 
-          toSlave.read(); 
+          toAndFromFC.read(); 
+          toAndFromFC.read(); 
         }
-        armSwitchValue = toSlave.read() | (toSlave.read() << 8); 
+        armSwitchValue = toAndFromFC.read() | (toAndFromFC.read() << 8); 
         int bytesConsumed = 8 + ((ARM_RC_CHANNEL - 4) * 2) + 2; 
-        for (int i = 0; i < (size - bytesConsumed); i++) {
-          toSlave.read(); 
-        }
+        for (int i = 0; i < (size - bytesConsumed); i++) { toAndFromFC.read(); }
       } 
       else { 
-        for (int i = 0; i < size; i++) {
-          toSlave.read(); 
-        }
+        for (int i = 0; i < size; i++) { toAndFromFC.read(); }
+      }
+
+      // THE FIX: Discard the 1-byte checksum that follows every payload
+      if (toAndFromFC.available() > 0) {
+        toAndFromFC.read();
       }
     }
   }
 }
 
 void setup() {
+  // Disable internal system logging to prevent UART chatter
   esp_log_level_set("*", ESP_LOG_NONE);
 
-  // LINK TO COMPUTER (USB Debugging)
-  // Ensure "USB CDC On Boot" is ENABLED in the Arduino Tools menu
+  // LINK TO COMPUTER (USB Debugging / Console)
+  // Ensure "USB CDC On Boot" is ENABLED in the Arduino IDE Tools menu
   console.begin(115200); 
 
   // LINK TO FLIGHT CONTROLLER (Pins 20/21)
-  // This is your existing working FC connection
-  toSlave.begin(115200, SERIAL_8N1, RX_FROM_FC, TX_TO_FC); 
+  // We start this early so it has the best chance of a clean sync
+  toAndFromFC.begin(115200, SERIAL_8N1, RX_FROM_FC, TX_TO_FC); 
 
-  // LINK TO SLAVE (Cockpit Screens)
-  // We use Serial0 but re-route it to different Pins
-  // This prevents it from clashing with the FC on pins 20/21
-  Serial0.begin(115200, SERIAL_8N1, SLAVE_RX, SLAVE_TX);
-
-  // Hardware Initialization
+  // HARDWARE INITIALIZATION
+  // Setting pinModes immediately prevents "Load Access Fault" crashes 
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
   pinMode(LED_BLUE, OUTPUT);
   digitalWrite(LED_BLUE, HIGH); 
   
+  // PERIPHERALS
   u8g2_builtin.begin();
   u8g2_builtin.setContrast(20);
+  u8g2_builtin.setFont(u8g2_font_6x10_tf);
+  
+  // Hardware boost is false by default to ensure stability during boot
   applyHardwareBoost(false);
 
   console.println("MASTER ONLINE - CHECKING FC...");
-  unsigned long bootCheckStart = millis();
   
-  // Try for 2 seconds to find an FC
-  while (millis() - bootCheckStart < 2000) {
+  unsigned long bootCheckStart = millis();
+  unsigned long maxWaitTime = 20000; 
+  
+  // THE BOOT SCAN LOOP
+  // yield() and delay() keep the Watchdog Timer (WDT) from triggering a crash
+  while (millis() - bootCheckStart < maxWaitTime) {
+    yield(); 
+
+    // Update Display Status
+    u8g2_builtin.clearBuffer();
+    u8g2_builtin.drawStr(0, 10, "WAITING FOR FC...");
+    u8g2_builtin.setCursor(0, 25);
+    u8g2_builtin.print("TIMEOUT: ");
+    u8g2_builtin.print((maxWaitTime - (millis() - bootCheckStart)) / 1000);
+    u8g2_builtin.print("s");
+    u8g2_builtin.sendBuffer();
+
+    // Clear buffer of any noise or partial packets
+    while(toAndFromFC.available()) toAndFromFC.read(); 
+
+    // Send MSP Request
     sendMSPRequest(108);
-    delay(100);
+    
+    // Give the FC 200ms to process and reply
+    delay(200); 
+    
     readMSPResponse();
+
+    // If we get a valid MSP response, we have an FC!
     if (sessionHasMSP) {
+      break;
+    }
+
+    // Manual Override: Pressing the boot button forces Bench Mode
+    if (digitalRead(BOOT_BUTTON) == LOW) {
       break;
     }
   }
 
+  // MODE ASSIGNMENT AND FINAL PORT INIT
   if (sessionHasMSP) {
     isBenchMode = false;
     console.println("MODE: FLIGHT (MSP DETECTED)");
+    
+    // START SLAVE PORT (Cockpit Screens)
+    // Starting this AFTER the FC is found prevents hardware resource clashing
+    // Start the hardware serial 0
+    toSlave.begin(115200, SERIAL_8N1, SLAVE_RX, SLAVE_TX);
+
+    // 2. FORCE UART0 (toSlave) to disconnect from GPIO 20/21
+    // UART_NUM_0 is the hardware index for toSlave
+    uart_set_pin(UART_NUM_0, SLAVE_TX, SLAVE_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    
+    // 3. FORCE UART1 (toAndFromFC) to claim GPIO 20/21
+    uart_set_pin(UART_NUM_1, TX_TO_FC, RX_FROM_FC, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    console.println("HARDWARE PIN LOCK APPLIED");
+
   } else {
     isBenchMode = true;
-    console.println("MODE: BENCH (SIMULATING)");
+    console.println("MODE: BENCH (FC TIMEOUT)");
   }
+
+  // Visual confirmation of boot completion
+  digitalWrite(LED_BLUE, LOW); 
 }
 
 void loop() {
@@ -274,32 +320,32 @@ void loop() {
 
   // THE 3-CHAR TAGGED BROADCAST
   if (millis() - lastBroadcast > 50) {
-    Serial0.print("ROL:"); 
-    Serial0.print(roll); 
-    Serial0.print(",");
+    toSlave.print("ROL:"); 
+    toSlave.print(roll); 
+    toSlave.print(",");
     
-    Serial0.print("PIT:"); 
-    Serial0.print(pitch); 
-    Serial0.print(",");
+    toSlave.print("PIT:"); 
+    toSlave.print(pitch); 
+    toSlave.print(",");
     
-    Serial0.print("HED:"); 
-    Serial0.print(heading); 
-    Serial0.print(",");
+    toSlave.print("HED:"); 
+    toSlave.print(heading); 
+    toSlave.print(",");
     
-    Serial0.print("ALT:"); 
-    Serial0.print(altitude);
-    Serial0.print(",");
+    toSlave.print("ALT:"); 
+    toSlave.print(altitude);
+    toSlave.print(",");
     
-    Serial0.print("BAT:"); 
-    Serial0.print(vBat); 
-    Serial0.print(",");
+    toSlave.print("BAT:"); 
+    toSlave.print(vBat); 
+    toSlave.print(",");
     
-    Serial0.print("GFO:"); 
-    Serial0.print(currentG);
-    Serial0.print(",");
+    toSlave.print("GFO:"); 
+    toSlave.print(currentG);
+    toSlave.print(",");
     
-    Serial0.print("WAR:"); 
-    Serial0.println(warActive ? 1 : 0);
+    toSlave.print("WAR:"); 
+    toSlave.println(warActive ? 1 : 0);
     
     lastBroadcast = millis();
   }
