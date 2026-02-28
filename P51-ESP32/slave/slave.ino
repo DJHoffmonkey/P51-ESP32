@@ -2,6 +2,9 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+auto& console = Serial;     // USB Port to your PC (Serial Monitor)
+auto& fromMaster = Serial1;   // Hardware pins 20/21 receiving from Master
+
 // --- PIN CONFIGURATION ---
 const int BUILT_IN_OLED_SCL = 6;
 const int BUILT_IN_OLED_SDA = 5;     
@@ -34,6 +37,9 @@ CockpitLayout cockpit = {
   {"HORIZON",   P51_HORIZON,   0.0, 0.0, 64, 32, 30, &u8g2e1},
   {"ALTIMETER", P51_ALTIMETER, 0.0, 0.0, 64, 32, 30, &u8g2e2}
 };
+
+float roll = 0.0, pitch = 0.0, heading = 0.0, altitude = 0.0, vBat = 0.0, currentG = 0.0;
+bool warActive = false;
 
 // --- DRAWING FUNCTIONS ---
 
@@ -109,7 +115,8 @@ void drawAltimeter(Instrument &inst) {
 void setup() {
   Wire.begin(EXT_OLED_SDA, EXT_OLED_SCL);
   Wire.setClock(400000);
-  Serial1.begin(115200, SERIAL_8N1, 20, 21);
+  console.begin(115200);  
+  fromMaster.begin(115200, SERIAL_8N1, 20, 21);
 
   u8g2e1.setI2CAddress(0x3C * 2); 
   u8g2e2.setI2CAddress(0x3D * 2);
@@ -124,34 +131,53 @@ void setup() {
   u8g2bi.sendBuffer();
 }
 
-void loop() {
-  if (Serial1.available() > 0) {
-    String data = Serial1.readStringUntil('\n');
-    data.trim();
-
-    int c1 = data.indexOf(',');
-    int c2 = data.indexOf(',', c1 + 1);
-    int c3 = data.indexOf(',', c2 + 1);
-
-    if (c1 != -1 && c2 != -1 && c3 != -1) {
-      float rVal = data.substring(0, c1).toFloat();
-      float pVal = data.substring(c1 + 1, c2).toFloat();
-      // Heading is at substring(c2 + 1, c3) - we can use it later
-      float aVal = data.substring(c3 + 1).toFloat();
-
-      cockpit.horizon.val1 = rVal;
-      cockpit.horizon.val2 = pVal;
-      cockpit.altimeter.val1 = aVal;
-
-      // Draw Buffer 1 (Horizon)
-      u8g2e1.clearBuffer();
-      drawHorizon(cockpit.horizon);
-      u8g2e1.sendBuffer();
-
-      // Draw Buffer 2 (Altimeter)
-      u8g2e2.clearBuffer();
-      drawAltimeter(cockpit.altimeter);
-      u8g2e2.sendBuffer();
+void readMasterData() {
+  if (fromMaster.available() > 0) {
+    String tag = fromMaster.readStringUntil(':'); 
+    float value = fromMaster.parseFloat();
+    
+    // --- CONSOLE PRINTING
+    console.print("TAG: "); console.print(tag);
+    console.print(" | VAL: "); console.println(value);
+    
+    if (tag == "ROL") roll = value;
+    else if (tag == "PIT") pitch = value;
+    else if (tag == "HED") heading = value;
+    else if (tag == "ALT") altitude = value;
+    else if (tag == "BAT") vBat = value;
+    else if (tag == "GFO") currentG = value;
+    else if (tag == "WAR") warActive = (value > 0.5);
+    
+    // Clear trailing separators
+    while (fromMaster.available() > 0 && (fromMaster.peek() == ',' || fromMaster.peek() == '\n')) {
+      fromMaster.read();
     }
   }
+}
+
+void loop() {
+  // 1. Listen for the tagged stream from Master
+  if (fromMaster.available() > 0) {
+    String tag = fromMaster.readStringUntil(':'); 
+    float value = fromMaster.parseFloat();
+    
+    // 2. Map tagged values to the correct instrument variables
+    if (tag == "ROL") cockpit.horizon.val1 = value;
+    else if (tag == "PIT") cockpit.horizon.val2 = value;
+    else if (tag == "ALT") cockpit.altimeter.val1 = value;
+    
+    // 3. Clean up the separator (comma or newline)
+    while (fromMaster.available() > 0 && (fromMaster.peek() == ',' || fromMaster.peek() == '\n' || fromMaster.peek() == '\r')) {
+      fromMaster.read();
+    }
+  }
+
+  // 4. Refresh Displays (Mechanical style: constant sweep)
+  u8g2e1.clearBuffer();
+  drawHorizon(cockpit.horizon);
+  u8g2e1.sendBuffer();
+
+  u8g2e2.clearBuffer();
+  drawAltimeter(cockpit.altimeter);
+  u8g2e2.sendBuffer();
 }

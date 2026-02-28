@@ -7,6 +7,10 @@
  * Role: MSP Parsing, K-14 HUD, 3-Char Tagged Serial Broadcast
  */
 
+// Name the serial ports
+auto& console = Serial;   // USB Debugging to PC
+auto& toSlave = Serial1;  // Hardware link to the Slave ESP32-C3
+
 // --- MISSION CONSTANTS ---
 const int BOOT_BUTTON = 9;   
 const int LED_BLUE = 8;
@@ -35,7 +39,7 @@ unsigned long buttonDownTime = 0, lastRequest = 0, lastDataTime = 0, lowVoltTime
 float vBat = 16.0, currentG = 1.0, roll = 0, pitch = 0, lastPitch = 0, lastRoll = 0, heading = 0, altitude = 0;
 float filteredX = 0, filteredY = 0;
 uint16_t armSwitchValue = 1000;
-bool sessionHasMSP = false, currentlyReceiving = false, showLowBatText = false;
+bool sessionHasMSP = false, currentlyReceiving = false, showLowBatText = false, isBenchMode = true;
 
 // --- HARDWARE BOOST ---
 void applyHardwareBoost(bool enable) {
@@ -60,72 +64,72 @@ void applyHardwareBoost(bool enable) {
 
 void sendMSPRequest(uint8_t cmd) { 
   uint8_t req[] = {'$', 'M', '<', 0, cmd, cmd}; 
-  Serial1.write(req, 6); 
+  toSlave.write(req, 6); 
 }
 
 void readMSPResponse() {
-  while (Serial1.available() >= 6) {
-    if (Serial1.peek() != '$') { 
-      Serial1.read(); 
+  while (toSlave.available() >= 6) {
+    if (toSlave.peek() != '$') { 
+      toSlave.read(); 
       continue; 
     }
-    if (Serial1.read() == '$' && Serial1.read() == 'M' && Serial1.read() == '>') {
-      uint8_t size = Serial1.read(); 
-      uint8_t cmd = Serial1.read();
+    if (toSlave.read() == '$' && toSlave.read() == 'M' && toSlave.read() == '>') {
+      uint8_t size = toSlave.read(); 
+      uint8_t cmd = toSlave.read();
       sessionHasMSP = true; 
       lastDataTime = millis();
 
       if (cmd == 108) { // ATTITUDE + HEADING
-        int16_t angX = Serial1.read() | (Serial1.read() << 8); 
-        int16_t angY = Serial1.read() | (Serial1.read() << 8); 
-        int16_t head = Serial1.read() | (Serial1.read() << 8); 
+        int16_t angX = toSlave.read() | (toSlave.read() << 8); 
+        int16_t angY = toSlave.read() | (toSlave.read() << 8); 
+        int16_t head = toSlave.read() | (toSlave.read() << 8); 
         roll = angX / 10.0; 
         pitch = angY / 10.0; 
         heading = (float)head;
         for (int i = 0; i < size - 6; i++) {
-          Serial1.read();
+          toSlave.read();
         }
       } 
       else if (cmd == 109) { // ALTITUDE
-        int32_t altCm = Serial1.read() | (Serial1.read() << 8) | (Serial1.read() << 16) | (Serial1.read() << 24);
+        int32_t altCm = toSlave.read() | (toSlave.read() << 8) | (toSlave.read() << 16) | (toSlave.read() << 24);
         altitude = altCm * 0.0328084; 
         for (int i = 0; i < size - 4; i++) {
-          Serial1.read();
+          toSlave.read();
         }
       }
       else if (cmd == 102) { // RAW IMU
         for (int i = 0; i < 4; i++) {
-          Serial1.read();
+          toSlave.read();
         }
-        int16_t az = Serial1.read() | (Serial1.read() << 8); 
+        int16_t az = toSlave.read() | (toSlave.read() << 8); 
         currentG = (((float)az / ACCEL_1G) * 0.1) + (currentG * 0.9);
         for (int i = 0; i < size - 6; i++) {
-          Serial1.read();
+          toSlave.read();
         }
       } 
       else if (cmd == 110) { // ANALOG VOLTS
-        vBat = ((Serial1.read() / 10.0) * 0.2) + (vBat * 0.8);
+        vBat = ((toSlave.read() / 10.0) * 0.2) + (vBat * 0.8);
         for (int i = 0; i < size - 1; i++) {
-          Serial1.read();
+          toSlave.read();
         }
       } 
       else if (cmd == 105) { // RC CHANNELS
         for (int i = 0; i < 8; i++) {
-          Serial1.read();
+          toSlave.read();
         }
         for (int i = 4; i < ARM_RC_CHANNEL; i++) { 
-          Serial1.read(); 
-          Serial1.read(); 
+          toSlave.read(); 
+          toSlave.read(); 
         }
-        armSwitchValue = Serial1.read() | (Serial1.read() << 8); 
+        armSwitchValue = toSlave.read() | (toSlave.read() << 8); 
         int bytesConsumed = 8 + ((ARM_RC_CHANNEL - 4) * 2) + 2; 
         for (int i = 0; i < (size - bytesConsumed); i++) {
-          Serial1.read(); 
+          toSlave.read(); 
         }
       } 
       else { 
         for (int i = 0; i < size; i++) {
-          Serial1.read(); 
+          toSlave.read(); 
         }
       }
     }
@@ -137,11 +141,11 @@ void setup() {
 
   // LINK TO COMPUTER (USB Debugging)
   // Ensure "USB CDC On Boot" is ENABLED in the Arduino Tools menu
-  Serial.begin(115200); 
+  console.begin(115200); 
 
   // LINK TO FLIGHT CONTROLLER (Pins 20/21)
   // This is your existing working FC connection
-  Serial1.begin(115200, SERIAL_8N1, RX_FROM_FC, TX_TO_FC); 
+  toSlave.begin(115200, SERIAL_8N1, RX_FROM_FC, TX_TO_FC); 
 
   // LINK TO SLAVE (Cockpit Screens)
   // We use Serial0 but re-route it to different Pins
@@ -157,7 +161,7 @@ void setup() {
   u8g2_builtin.setContrast(20);
   applyHardwareBoost(false);
 
-  Serial.println("MASTER ONLINE - CHECKING FC...");
+  console.println("MASTER ONLINE - CHECKING FC...");
   unsigned long bootCheckStart = millis();
   
   // Try for 2 seconds to find an FC
@@ -172,10 +176,10 @@ void setup() {
 
   if (sessionHasMSP) {
     isBenchMode = false;
-    Serial.println("MODE: FLIGHT (MSP DETECTED)");
+    console.println("MODE: FLIGHT (MSP DETECTED)");
   } else {
     isBenchMode = true;
-    Serial.println("MODE: BENCH (SIMULATING)");
+    console.println("MODE: BENCH (SIMULATING)");
   }
 }
 
@@ -344,9 +348,8 @@ void loop() {
     u8g2_builtin.drawHLine(0, gY, 3);
 
     if (showLowBatText) {
-      char vBuf; 
-      dtostrf(vBat, 4, 1, vBuf);
-      u8g2_builtin.drawStr(25, 39, "LOW "); 
+      char vBuf[8]; 
+      dtostrf(vBat, 4, 1, vBuf), u8g2_builtin.drawStr(25, 39, "LOW "); 
       u8g2_builtin.drawStr(45, 39, vBuf);
     }
     if (manualMode) {
